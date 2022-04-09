@@ -18,7 +18,7 @@ operators = {ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul,
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-bot = commands.Bot(command_prefix='!')
+bot = commands.Bot(command_prefix='%')
 
 FACES = np.arange(1, 11, dtype=np.uint)
 
@@ -276,8 +276,6 @@ def _roll_dnd(rolagem: str):
     final_str = ''.join(new_str)
     result = eval_expr(final_str)
     return result, final_str, rolls_results
-
-
 
 
 if __name__ == '__main__':

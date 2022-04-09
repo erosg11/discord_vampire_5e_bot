@@ -1,0 +1,4 @@
+python-dotenv~=0.20.0
+numpy~=1.19.5
+opencv-python~=4.1.1.26
+discord.py~=1.7.3
