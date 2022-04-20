@@ -3,20 +3,185 @@ import ast
 import operator as op
 from io import BytesIO
 import re
+from typing import List
+from tempfile import TemporaryDirectory
+from pathlib import Path
+from asyncio import create_task, Lock
 
 from dotenv import load_dotenv
 import numpy as np
 import cv2
+from PyPDF2 import PdfFileReader
+from unidecode import unidecode
+import pandas as pd
 
 from discord.ext import commands
 from discord.ext.commands import Context
-from discord import File
+from discord import File, Attachment, Message, User
 
 operators = {ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul,
              ast.Div: op.truediv, ast.USub: op.neg, ast.UAdd: op.pos}
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+SHEETS_FILE = Path(os.getenv('SHEETS_FILE'))
+DF_LOCK = Lock()
+
+IMPORTANT_FIELDS = [
+    ('Fome', 5),
+    ('Força de Vontade', 10),
+    ('Humanidade', 10),
+    ('Vitalidade', 10),
+    ('Força', 10),
+    ('Destreza', 10),
+    ('Vigor', 10),
+    ('Carisma', 10),
+    ('Manipulação', 10),
+    ('Compostura', 10),
+    ('Inteligência', 10),
+    ('Raciocínio', 10),
+    ('Determinação', 10),
+    ('Atletismo', 5),
+    ('Armas Brancas', 5),
+    ('Armas de Fogo', 5),
+    ('Briga', 5),
+    ('Condução', 5),
+    ('Furtividade', 5),
+    ('Ofícios', 5),
+    ('Roubo', 5),
+    ('Empatia Com Animais', 5),
+    ('Etiqueta', 5),
+    ('Intimidação', 5),
+    ('Liderança', 5),
+    ('Lábia', 5),
+    ('Intuição', 5),
+    ('Persuasão', 5),
+    ('Performance', 5),
+    ('Manha', 5),
+    ('Acadêmicos', 5),
+    ('Ciências', 5),
+    ('Finanças', 5),
+    ('Investigação', 5),
+    ('Medicina', 5),
+    ('Ocultismo', 5),
+    ('Política', 5),
+    ('Prontidão', 5),
+    ('Tecnologia', 5),
+    ('Sobrevivência', 5),
+]
+
+DISCIPLINAS = [
+    'animalismo',
+    'auspicio',
+    'celeridade',
+    'dominacao',
+    'feiticaria_de_sangue',
+    'fortitude',
+    'oblivio',
+    'ofuscacao',
+    'potencia',
+    'presenca',
+    'metamorfose',
+    'alquimia_sangue_fraco',
+]
+
+DEBUG = False
+
+
+def clean_text(text: str, underscore=False):
+    new_text = unidecode(text.lower())
+    if underscore:
+        new_text = re.sub(r'\s', '_', new_text)
+    return new_text
+
+
+def create_alias_dict(key: str, *values) -> dict:
+    return {
+        x: key for x in list(values) + [clean_text(key, True)]
+    }
+
+
+if DEBUG:
+    from sys import exit
+
+    _create_alias_dict = create_alias_dict
+    _inserted_keys = set()
+
+
+    def create_alias_dict(key: str, *values) -> dict:
+        final_dict = _create_alias_dict(key, *values)
+        if len(final_dict) != len(values) + 1:
+            print('ERROR not returned dict with expected size for key', key, final_dict.keys(), values)
+            exit(1)
+        for k in final_dict:
+            if k in _inserted_keys:
+                print('ERROR key', k, 'for status', key, 'already in ALIAS dict')
+                exit(1)
+            _inserted_keys.add(k)
+        return final_dict
+
+ALIAS = {
+    **create_alias_dict('fome', 'fom', 'quantas_chupadas_tenho_que_dar'),
+    **create_alias_dict('força de vontade', 'foc', 'von'),
+    **create_alias_dict('humanidade', 'hum'),
+    **create_alias_dict('vitalidade', 'vit', 'vida', 'quanto_tapa_aguento', 'hp_max', 'sangue'),
+    **create_alias_dict('vitalidade atual', 'via', 'vida_atual', 'vou_mim_morrer', 'hp'),
+    **create_alias_dict('força', 'for', 'maromba', 'bícipes', 'body_build', 'biiir', 'se_liga_no_shape_do_pai',
+                        'se_liga_no_shape_da_mae'),
+    **create_alias_dict('destreza', 'agilidade', 'dex', 'agi'),
+    **create_alias_dict('vigor', 'vig', 'pulmão', 'stamina', 'sta'),
+    **create_alias_dict('carisma', 'car', 'fala_mansa'),
+    **create_alias_dict('manipulação', 'man', 'mai'),
+    **create_alias_dict('autocontrole', 'auc', 'auto_controle', 'nao_ser_louco', 'compostura', 'com'),
+    **create_alias_dict('inteligência', 'int', 'ine'),
+    **create_alias_dict('raciocínio', 'rac', 'pensa_rapido'),
+    **create_alias_dict('determinação', 'det'),
+    **create_alias_dict('atletismo', 'atl', 'corre_corre', 'corre_berg', 'deu_ruim', 'vel'),
+    **create_alias_dict('armas brancas', 'arb', 'olha_a_faca'),
+    **create_alias_dict('armas de fogo', 'arf', 'pou_pou', 'pou'),
+    **create_alias_dict('briga', 'bri', 'fight', 'cai_na_mao', 'voadora', 'voadora_de_duas_pernas'),
+    **create_alias_dict('condução', 'con', 'vrum'),
+    **create_alias_dict('furtividade', 'fur', 'invisibilidade'),
+    **create_alias_dict('ofícios', 'ofi', 'oficio'),
+    **create_alias_dict('roubo', 'rou', 'pick_pocket', 'perdeu_playboy', 'perdeu_preiboi', 'ladroagem', 'lad'),
+    **create_alias_dict('sobrevivencia', 'sob', 'survive', 'i_will_survive'),
+    **create_alias_dict('empatia com animais', 'ema', 'auau', 'miau', 'bee', 'bzz', 'relinchar'),
+    **create_alias_dict('etiqueta', 'eti', 'frescura'),
+    **create_alias_dict('intimidação', 'ini'),
+    **create_alias_dict('intuição', 'inu', 'terceiro_olho', 'sagacidade', 'sag'),
+    **create_alias_dict('lábia', 'lab', 'subterfugio', 'sub'),
+    **create_alias_dict('liderança', 'lid'),
+    **create_alias_dict('manha', 'mah'),
+    **create_alias_dict('performance', 'per', 'pef', 'canta_raul'),
+    **create_alias_dict('persuasão', 'pes', 'hinode'),
+    **create_alias_dict('acadêmicos', 'aca', 'erudicao', 'eru', 'sabido'),
+    **create_alias_dict('ciências', 'cie'),
+    **create_alias_dict('finanças', 'fin', 'pirâmide', 'bitcoin'),
+    **create_alias_dict('investigação', 'inv', 'parece_que_temos_um_xeroque_rolmes_aqui'),
+    **create_alias_dict('medicina', 'med', 'doutor_mim_salve'),
+    **create_alias_dict('ocultismo', 'ocu', 'chapeu_de_aluminio'),
+    **create_alias_dict('política', 'pol', 'roubo_socialmente_aceitavel'),
+    **create_alias_dict('percepção', 'prontidao', 'pec', 'perc', 'pron', 'ta_ligado'),
+    **create_alias_dict('tecnologia', 'tec', 'hack', 'formata_o_uindous'),
+    **create_alias_dict('animalismo', 'ani'),
+    **create_alias_dict('auspícios', 'aus', 'auspicio'),
+    **create_alias_dict('celeridade', 'cel'),
+    **create_alias_dict('dominação', 'dom'),
+    **create_alias_dict('feitiçaria de sangue', 'fei'),
+    **create_alias_dict('fortitude', 'foi'),
+    **create_alias_dict('oblívio', 'obl'),
+    **create_alias_dict('ofuscação', 'ofu'),
+    **create_alias_dict('potência', 'pot'),
+    **create_alias_dict('presença', 'pre'),
+    **create_alias_dict('metamorfose', 'met'),
+    **create_alias_dict('alquimia sangue fraco', 'asf'),
+}
+
+BACKSLASH = '\\'
+
+REGEX_ALIAS = f"(?:([a-z0-9_]+){BACKSLASH}.)?({'|'.join(sorted(ALIAS.keys(), key=len, reverse=True))})"
+
+REGEX_ALIAS_FULL_STR = f'^{REGEX_ALIAS}$'
 
 bot = commands.Bot(command_prefix='%')
 
@@ -57,6 +222,19 @@ DICES_FACES = {
 DICES_PER_LINE = 10
 DICES_LIMIT = 100
 
+COMPULSAO = {
+    1: "Fome",
+    2: "Fome",
+    3: "Fome",
+    4: "Dominância",
+    5: "Dominância",
+    6: 'Destruição',
+    7: 'Destruição',
+    8: 'Paranoia',
+    9: 'Paranoia',
+    10: 'Compulsão do Clã'
+}
+
 
 def eval_expr(expr):
     return eval_(ast.parse(expr, mode='eval').body)
@@ -91,9 +269,9 @@ def create_image(rolagens_normais, rolagens_bestiais):
     i = 0
     img = np.ones((image_height, image_width, 3), np.uint8) * 255
 
-    #TODO inserir isso em uma função
+    # TODO inserir isso em uma função
     for roll in rolagens_normais:
-        img[y:y+66, x:x+62] = DICES_FACES[(False, roll)]
+        img[y:y + 66, x:x + 62] = DICES_FACES[(False, roll)]
         i += 1
         if i % DICES_PER_LINE == 0:
             x = 0
@@ -101,7 +279,7 @@ def create_image(rolagens_normais, rolagens_bestiais):
         else:
             x += 62
     for roll in rolagens_bestiais:
-        img[y:y+66, x:x+62] = DICES_FACES[(True, roll)]
+        img[y:y + 66, x:x + 62] = DICES_FACES[(True, roll)]
         i += 1
         if i % DICES_PER_LINE == 0:
             x = 0
@@ -129,7 +307,7 @@ def create_image_file(rolagens_normais, rolagens_bestiais, filename):
     `/roll5e [parada] [fome] [dificuldade] [acertos prévios]`
 todos os valores podem ser informado como expressões aritméticas como 5+3+2
 Acertos prévios é útil ao utilizar força de vontade para refazer uma rolagem anterior''')
-async def roll5e(ctx: Context, parada: str, fome: str = '0', dificuldade: str = '0', acertos_previos: str = '0'):
+async def roll5e(ctx: Context, parada: str = '1', fome: str = '0', dificuldade: str = '0', acertos_previos: str = '0'):
     try:
         parada_int = eval_expr(parada)
     except (ValueError, KeyError, TypeError):
@@ -142,31 +320,31 @@ async def roll5e(ctx: Context, parada: str, fome: str = '0', dificuldade: str = 
     try:
         fome_int = eval_expr(fome)
     except (ValueError, KeyError, TypeError):
-        await ctx.send(f'Fome "{parada}" inválida.')
+        await ctx.send(f'Fome "{fome}" inválida.')
         return
     if fome_int < 0:
-        await ctx.send(f'Total de fome "{parada_int}" inválido, caso queira rolar sem fome'
+        await ctx.send(f'Total de fome "{fome_int}" inválido, caso queira rolar sem fome'
                        ', tente novamente com 0.')
+
+    fome_int = min(fome_int, parada_int)
+
     try:
         dificuldade_int = eval_expr(dificuldade)
     except (ValueError, KeyError, TypeError):
-        await ctx.send(f'Dificuldade "{parada}" inválida.')
+        await ctx.send(f'Dificuldade "{dificuldade}" inválida.')
         return
-    if fome_int < 0:
-        await ctx.send(f'Total de dificuldade "{parada_int}" inválido, caso queira rolar sem dificuldade definida'
+    if dificuldade_int < 0:
+        await ctx.send(f'Total de dificuldade "{dificuldade_int}" inválido, caso queira rolar sem dificuldade definida'
                        ', tente novamente com 0.')
 
     try:
         acertos_previos_int = eval_expr(acertos_previos)
     except (ValueError, KeyError, TypeError):
-        await ctx.send(f'Acertos prévios "{parada}" inválidos.')
+        await ctx.send(f'Acertos prévios "{acertos_previos}" inválidos.')
         return
     if fome_int < 0:
-        await ctx.send(f'Total de acertos prévios "{parada_int}" inválido, caso queira rolar sem eles'
+        await ctx.send(f'Total de acertos prévios "{acertos_previos_int}" inválido, caso queira rolar sem eles'
                        ', tente novamente com 0.')
-
-    if fome_int > parada_int:
-        parada_int = fome_int
 
     rolagens = np.random.choice(FACES, parada_int - fome_int)
 
@@ -175,15 +353,15 @@ async def roll5e(ctx: Context, parada: str, fome: str = '0', dificuldade: str = 
     criticos_padrao = (rolagens == 10).sum()
     criticos_baguncados = (rolagens_fome == 10).sum()
 
-    acertos = (rolagens >= 6).sum() + (rolagens_fome >= 6).sum() - criticos_padrao - criticos_baguncados + (
-            criticos_padrao + criticos_baguncados) // 2 * 4 + acertos_previos_int
+    acertos = (rolagens >= 6).sum() + (rolagens_fome >= 6).sum() + (
+            criticos_padrao + criticos_baguncados) + acertos_previos_int
 
     falhas_bestiais = (rolagens_fome == 1).sum()
     falhas_totais = (rolagens == 1).sum()
 
     if acertos >= dificuldade_int:
         margem = acertos - dificuldade_int
-        if criticos_padrao >= 2:
+        if criticos_padrao >= 1:
             status = f'Crítico padrão com {margem} de margem'
         elif criticos_baguncados >= 1 and criticos_padrao + criticos_baguncados >= 2:
             status = f'Crítico bagunçado com {margem} de margem'
@@ -201,6 +379,22 @@ async def roll5e(ctx: Context, parada: str, fome: str = '0', dificuldade: str = 
     Roalgens normais: {', '.join([NUMBER_FORMATS[x] for x in rolagens])}
     Rolagens de fome: {', '.join([NUMBER_FORMATS[x] for x in rolagens_fome])}""",
                    file=create_image_file(rolagens, rolagens_fome, f'rolagem_{ctx.guild}.png'))
+
+
+@bot.command(name='rc', help='''Executa um checagem de sangue''')
+async def roll_rouse_check(ctx: Context):
+    resultado = np.random.choice(FACES, size=(1,))  # type: np.ndarray
+    await ctx.send(f'''> **{'Passou' if resultado >= 6 else '+1 Fome'}**
+    resultado: {resultado[0]}''', file=create_image_file(resultado, [], f'Rouse check {ctx.guild}.png'))
+
+
+@bot.command(name='compulsao', help='''Executa um teste de compulsão''')
+async def roll_compulsao(ctx: Context):
+    resultado = np.random.choice(FACES, size=(1,))  # type: np.ndarray
+    compulsao = COMPULSAO[resultado[0]]
+    await ctx.send(f'''> **{compulsao}**
+    resultado: {resultado[0]}''', file=create_image_file(resultado, [], f'Compulsao {ctx.guild}.png'))
+
 
 @bot.command(name='roll', help='''Executa uma rolagem de D&D5e
 É aceito algo do tipo !roll 5d6kH1kL2+3d10+6
@@ -278,6 +472,178 @@ def _roll_dnd(rolagem: str):
     return result, final_str, rolls_results
 
 
+def _read_sheet_from_pdf(pdf_file):
+    pdf = PdfFileReader(str(pdf_file))
+    fields = pdf.getFields()
+    sheet = {ALIAS[x]: 0 for x in DISCIPLINAS}
+    for field, qtd in IMPORTANT_FIELDS:
+        sheet_field = ALIAS[clean_text(field, True)]
+        sheet[sheet_field] = 0
+        for field_suffix in [''] + list(range(1, qtd)):
+            if fields[f'{field}{field_suffix}'].get(r'/V') == r'/Sim':
+                sheet[sheet_field] += 1
+    for displina_field_suffix, level_suffix in zip([''] + list(range(1, 6)), ['A', 'C', 'E', 'B', 'D', 'F']):
+        disciplina_name = fields[f'Nome da Disciplina{displina_field_suffix}'].get('/V')
+        if disciplina_name is None:
+            continue
+        cleaned_disciplina = clean_text(disciplina_name, True)
+        normalized_name = [x for x in DISCIPLINAS if x in cleaned_disciplina]
+        if len(normalized_name) != 1:
+            raise ValueError(f'Error in disciplina {disciplina_name} {cleaned_disciplina} {normalized_name}')
+        normalized_name = ALIAS[normalized_name[0]]
+        for power_suffix in [''] + list(range(1, 5)):
+            if fields[f'Poder{level_suffix}{power_suffix}'].get(r'/V') == r'/Sim':
+                sheet[normalized_name] += 1
+    return sheet
+
+
+@bot.command(name='ficha', help='''Envie a ficha por PDF, e então é feita a leitura dela e armazenamento dos dados
+Você pode dar um nome personalizado para a ficha, para poder ter mais de uma ao fazer as rolagens''')
+async def read_sheet(ctx: Context, name: str = ''):
+    if re.match(r'^[a-z0-9_]*$', name) is None:
+        await ctx.message.delete()
+        await ctx.send('''> **Erro**
+O nome da ficha só pode ter letras números e _''')
+        return
+    message = ctx.message  # type: Message
+    attachments = message.attachments  # type: List[Attachment]
+    author = ctx.author  # type: User
+    if len(attachments) != 1:
+        await ctx.send('''> **ERRO**
+Envie a sua ficha em PDF como anexo e somente ela para que possa ser feita a leitura''')
+        return
+    create_task(ctx.send('Baixando e lendo a sua ficha'))
+    with TemporaryDirectory() as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        sheet_file = temp_dir / 'sheet.pdf'
+        try:
+            with sheet_file.open('wb') as fp:
+                await attachments[0].save(fp)
+            await message.delete()
+            sheet = _read_sheet_from_pdf(sheet_file)
+            sheet['vitalidade atual'] = sheet['vitalidade']
+            global df
+            df_row = (ctx.guild.id, author.id, name)
+            async with DF_LOCK:
+                df.loc[df_row, :] = 0
+                for k, v in sheet.items():
+                    df.loc[df_row, k] = int(v)
+                df.to_csv(SHEETS_FILE)
+        except BaseException as e:
+            await ctx.send('''> **ERRO**
+Erro ao ler a sua ficha, peça para o Eros verificar, mais detalhes se encontram no log da aplicação''')
+            raise e
+    await ctx.send('> **Lido**\nVerifique sua DM')
+    await author.send(f'''> **Lido**
+```{"""
+""".join([f'{k}: {v}' for k, v in sheet.items()])}```
+''')
+
+
+async def evaluate_sheet_expression(guild, user, expression):
+    matchs = re.finditer(REGEX_ALIAS, clean_text(expression))
+    new_str_display_fragments = []
+    append_display_fragment = new_str_display_fragments.append
+    new_str_process_fragments = []
+    append_process_fragments = new_str_process_fragments.append
+
+    def append_fragment(fragment):
+        nonlocal append_process_fragments, append_display_fragment
+        append_process_fragments(fragment)
+        append_display_fragment(fragment)
+
+    last_end = 0
+    for match in matchs:
+        start = match.start()
+        append_fragment(expression[last_end:start])
+        end = match.end()
+        last_end = end
+        status = ALIAS[match.group(2)]
+        append_display_fragment(status)
+        character = match.group(1)
+        if character is None:
+            character = ''
+        async with DF_LOCK:
+            value = df.loc[(guild, user, character), status]
+        append_process_fragments(f'({value})')
+    append_fragment(expression[last_end:])
+    return ''.join(new_str_display_fragments), int(eval_expr(''.join(new_str_process_fragments)))
+
+
+@bot.command(name='setf', help='''Altera o valor de um parâmetro da ficha''')
+async def increment_sheet_value(ctx: Context, attr: str, value: str = '1', character: str = ''):
+    attr = clean_text(attr)
+    if attr not in ALIAS:
+        await ctx.send(f'''> **Erro**
+Manda o bagulho direito, o que é {attr}?''')
+        return
+    final_attr = ALIAS[attr]
+    guild = ctx.guild.id
+    user = ctx.author.id
+    try:
+        display_expr, value_int = await evaluate_sheet_expression(guild, user, value)
+    except BaseException as e:
+        await ctx.send(f'''> **Erro**
+Manda o bagulho direito, o que é {value}?''')
+        raise e
+    try:
+        key = (guild, user, character)
+        async with DF_LOCK:
+            if key not in df.index:
+                await ctx.send(f'''> **Erro**
+Manda o bagulho direito,quem é {character}?''')
+                return
+            df.loc[key, final_attr] = value_int
+            df.to_csv(SHEETS_FILE)
+    except BaseException as e:
+        await ctx.send('''> **ERRO**
+Erro ao atualizar a sua ficha, peça para o Eros verificar, mais detalhes se encontram no log da aplicação''')
+        raise e
+    create_task(ctx.send(f'''> **Feito**
+{final_attr} = {display_expr}
+Verifique a sua DM para mais informações!'''))
+    await ctx.author.send(f'''> **Atualizado**
+{final_attr} = {value_int}''')
+
+
+@bot.command(name='getf', help='Obtém o valor de um atributo na ficha')
+async def get_sheet_value(ctx: Context, attr: str, character: str = ''):
+    attr = clean_text(attr)
+    if attr not in ALIAS:
+        await ctx.send(f'''> **Erro**
+Manda o bagulho direito, o que é {attr}?''')
+        return
+    final_attr = ALIAS[attr]
+    guild = ctx.guild.id
+    user = ctx.author.id
+    key = (guild, user, character)
+    async with DF_LOCK:
+        if key not in df.index:
+            await ctx.send(f'''> **Erro**
+Manda o bagulho direito,quem é {character}?''')
+            return
+        value = df.loc[key, final_attr]
+    await ctx.author.send(f'{final_attr} = {value}')
+
+
+@bot.command(name='roll5f', help='''Rola os dados como o roll3e, mas utilizando também os dados da ficha''')
+async def roll_5e_with_sheet(ctx: Context, parada: str = '1', fome: str = '0', dificuldade: str = '0'):
+    user = ctx.author.id
+    guild = ctx.guild.id
+    parada_explain, parada_int = await evaluate_sheet_expression(guild, user, parada)
+    fome_explain, fome_int = await evaluate_sheet_expression(guild, user, fome)
+    dificuldade_explain, dificuldade_int = await evaluate_sheet_expression(guild, user, dificuldade)
+    await ctx.send(f'Rolando {parada_explain} {fome_explain} {dificuldade_explain}')
+    await roll5e(ctx, str(parada_int), str(fome_int), str(dificuldade_int))
+
+
 if __name__ == '__main__':
     print('Iniciando')
+    if not SHEETS_FILE.is_file():
+        df = pd.DataFrame(columns=['guild', 'user', 'character'] + sorted(list(set(ALIAS.values())))).set_index(
+            ['guild', 'user', 'character'])
+        df.to_csv(SHEETS_FILE)
+    else:
+        df = pd.read_csv(SHEETS_FILE, index_col=['guild', 'user', 'character'], keep_default_na=False,
+                         dtype={k: int for k in set(ALIAS.values())})
     bot.run(TOKEN)
