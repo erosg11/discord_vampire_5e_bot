@@ -122,14 +122,14 @@ if DEBUG:
 
 ALIAS = {
     **create_alias_dict('fome', 'fom', 'quantas_chupadas_tenho_que_dar'),
-    **create_alias_dict('força de vontade', 'foc', 'von'),
+    **create_alias_dict('força de vontade', 'foc', 'von', 'vontade'),
     **create_alias_dict('humanidade', 'hum'),
     **create_alias_dict('vitalidade', 'vit', 'vida', 'quanto_tapa_aguento', 'hp_max', 'sangue'),
     **create_alias_dict('vitalidade atual', 'via', 'vida_atual', 'vou_mim_morrer', 'hp'),
-    **create_alias_dict('força', 'for', 'maromba', 'bícipes', 'body_build', 'biiir', 'se_liga_no_shape_do_pai',
+    **create_alias_dict('força', 'for', 'maromba', 'bicipes', 'body_build', 'biiir', 'se_liga_no_shape_do_pai',
                         'se_liga_no_shape_da_mae'),
     **create_alias_dict('destreza', 'agilidade', 'dex', 'agi'),
-    **create_alias_dict('vigor', 'vig', 'pulmão', 'stamina', 'sta'),
+    **create_alias_dict('vigor', 'vig', 'pulmao', 'stamina', 'sta'),
     **create_alias_dict('carisma', 'car', 'fala_mansa'),
     **create_alias_dict('manipulação', 'man', 'mai'),
     **create_alias_dict('autocontrole', 'auc', 'auto_controle', 'nao_ser_louco', 'compostura', 'com'),
@@ -145,7 +145,7 @@ ALIAS = {
     **create_alias_dict('ofícios', 'ofi', 'oficio'),
     **create_alias_dict('roubo', 'rou', 'pick_pocket', 'perdeu_playboy', 'perdeu_preiboi', 'ladroagem', 'lad'),
     **create_alias_dict('sobrevivencia', 'sob', 'survive', 'i_will_survive'),
-    **create_alias_dict('empatia com animais', 'ema', 'auau', 'miau', 'bee', 'bzz', 'relinchar'),
+    **create_alias_dict('empatia com animais', 'ema', 'auau', 'miau', 'beeh', 'bzz', 'relinchar'),
     **create_alias_dict('etiqueta', 'eti', 'frescura'),
     **create_alias_dict('intimidação', 'ini'),
     **create_alias_dict('intuição', 'inu', 'terceiro_olho', 'sagacidade', 'sag'),
@@ -397,7 +397,7 @@ async def roll_compulsao(ctx: Context):
 
 
 @bot.command(name='roll', help='''Executa uma rolagem de D&D5e
-É aceito algo do tipo !roll 5d6kH1kL2+3d10+6
+É aceito algo do tipo %roll 5d6kH1kL2+3d10+6
 Ou seja [quantos dados]d[quantas faces]kH[matendo os N mais altos]kL[Mantendo os N mais baixos]''')
 async def roll_dnd(ctx: Context, rolagem: str = '1d6'):
     try:
@@ -498,7 +498,9 @@ def _read_sheet_from_pdf(pdf_file):
 
 
 @bot.command(name='ficha', help='''Envie a ficha por PDF, e então é feita a leitura dela e armazenamento dos dados
-Você pode dar um nome personalizado para a ficha, para poder ter mais de uma ao fazer as rolagens''')
+Você pode dar um nome personalizado para a ficha, para poder ter mais de uma ao fazer as rolagens
+Utilize a sua ficha nos comandos terminados em f
+Para usar valores de outras fichas nos comandos terminados em f, use por exemplo %getf ficha2.fome''')
 async def read_sheet(ctx: Context, name: str = ''):
     if re.match(r'^[a-z0-9_]*$', name) is None:
         await ctx.message.delete()
@@ -528,6 +530,7 @@ Envie a sua ficha em PDF como anexo e somente ela para que possa ser feita a lei
                 df.loc[df_row, :] = 0
                 for k, v in sheet.items():
                     df.loc[df_row, k] = int(v)
+                df = df.astype(int)
                 df.to_csv(SHEETS_FILE)
         except BaseException as e:
             await ctx.send('''> **ERRO**
@@ -570,7 +573,8 @@ async def evaluate_sheet_expression(guild, user, expression):
     return ''.join(new_str_display_fragments), int(eval_expr(''.join(new_str_process_fragments)))
 
 
-@bot.command(name='setf', help='''Altera o valor de um parâmetro da ficha''')
+@bot.command(name='setf', help='''Altera o valor de um atributo da ficha
+Você pode usar expressões matemática usando também valores da sua ficha e de outras que tenha criado''')
 async def increment_sheet_value(ctx: Context, attr: str, value: str = '1', character: str = ''):
     attr = clean_text(attr)
     if attr not in ALIAS:
@@ -606,7 +610,7 @@ Verifique a sua DM para mais informações!'''))
 {final_attr} = {value_int}''')
 
 
-@bot.command(name='getf', help='Obtém o valor de um atributo na ficha')
+@bot.command(name='getf', help='Obtém o valor de um atributo em uma de suas fichas')
 async def get_sheet_value(ctx: Context, attr: str, character: str = ''):
     attr = clean_text(attr)
     if attr not in ALIAS:
@@ -626,15 +630,42 @@ Manda o bagulho direito,quem é {character}?''')
     await ctx.author.send(f'{final_attr} = {value}')
 
 
-@bot.command(name='roll5f', help='''Rola os dados como o roll3e, mas utilizando também os dados da ficha''')
-async def roll_5e_with_sheet(ctx: Context, parada: str = '1', fome: str = '0', dificuldade: str = '0'):
+@bot.command(name='roll5f', help='''Rola os dados como o roll5e, mas utilizando também os dados da ficha
+Por exempo %roll5f força+briga''')
+async def roll_5e_with_sheet(ctx: Context, parada: str = '1', fome: str = 'fome', dificuldade: str = '0'):
     user = ctx.author.id
     guild = ctx.guild.id
     parada_explain, parada_int = await evaluate_sheet_expression(guild, user, parada)
     fome_explain, fome_int = await evaluate_sheet_expression(guild, user, fome)
     dificuldade_explain, dificuldade_int = await evaluate_sheet_expression(guild, user, dificuldade)
-    await ctx.send(f'Rolando {parada_explain} {fome_explain} {dificuldade_explain}')
+    await ctx.send(f'Rolando parada=[{parada_explain}] fome=[{fome_explain}] dificuldade=[{dificuldade_explain}]')
     await roll5e(ctx, str(parada_int), str(fome_int), str(dificuldade_int))
+
+
+@bot.command(name='rcf', help='Rola o rc e atualiza automaticamente a ficha')
+async def rouse_check_sheet(ctx: Context, nome: str = ''):
+    resultado = np.random.choice(FACES, size=(1,))  # type: np.ndarray
+    if resultado >= 6:
+        await ctx.send(f'''> **Passou**
+            resultado: {resultado[0]}''', file=create_image_file(resultado, [], f'Rouse check {ctx.guild}.png'))
+    else:
+        key = (ctx.guild.id, ctx.author.id, nome)
+        try:
+            async with DF_LOCK:
+                if key not in df.index:
+                    await ctx.send(f'''> **Erro**
+Manda o bagulho direito,quem é {nome}?''')
+                    return
+                df.loc[key, 'fome'] += 1
+                fome = df.loc[key, 'fome']
+                df.to_csv(SHEETS_FILE)
+        except BaseException as e:
+            await ctx.send('''> **ERRO**
+Erro ao atualizar a sua ficha, peça para o Eros verificar, mais detalhes se encontram no log da aplicação''')
+            raise e
+        await ctx.send(f'''> **+1 Fome**
+                    resultado: {resultado[0]}''', file=create_image_file(resultado, [], f'Rouse check {ctx.guild}.png'))
+        await ctx.author.send(f'fome = {fome}')
 
 
 if __name__ == '__main__':
