@@ -167,7 +167,7 @@ ALIAS = {
     **create_alias_dict('auspícios', 'aus', 'auspicio'),
     **create_alias_dict('celeridade', 'cel'),
     **create_alias_dict('dominação', 'dom'),
-    **create_alias_dict('feitiçaria de sangue', 'fei'),
+    **create_alias_dict('feitiçaria de sangue', 'feiticaria', 'fei', 'rituais'),
     **create_alias_dict('fortitude', 'foi'),
     **create_alias_dict('oblívio', 'obl'),
     **create_alias_dict('ofuscação', 'ofu'),
@@ -376,7 +376,7 @@ async def roll5e(ctx: Context, parada: str = '1', fome: str = '0', dificuldade: 
 
     await ctx.send(f"""> **{status}**
     Acertos: {acertos}
-    Roalgens normais: {', '.join([NUMBER_FORMATS[x] for x in rolagens])}
+    Rolagens normais: {', '.join([NUMBER_FORMATS[x] for x in rolagens])}
     Rolagens de fome: {', '.join([NUMBER_FORMATS[x] for x in rolagens_fome])}""",
                    file=create_image_file(rolagens, rolagens_fome, f'rolagem_{ctx.guild}.png'))
 
@@ -522,16 +522,7 @@ Envie a sua ficha em PDF como anexo e somente ela para que possa ser feita a lei
             with sheet_file.open('wb') as fp:
                 await attachments[0].save(fp)
             await message.delete()
-            sheet = _read_sheet_from_pdf(sheet_file)
-            sheet['vitalidade atual'] = sheet['vitalidade']
-            global df
-            df_row = (ctx.guild.id, author.id, name)
-            async with DF_LOCK:
-                df.loc[df_row, :] = 0
-                for k, v in sheet.items():
-                    df.loc[df_row, k] = int(v)
-                df = df.astype(int)
-                df.to_csv(SHEETS_FILE)
+            sheet = await save_sheet(sheet_file, ctx.guild.id, author.id, name)
         except BaseException as e:
             await ctx.send('''> **ERRO**
 Erro ao ler a sua ficha, peça para o Eros verificar, mais detalhes se encontram no log da aplicação''')
@@ -541,6 +532,20 @@ Erro ao ler a sua ficha, peça para o Eros verificar, mais detalhes se encontram
 ```{"""
 """.join([f'{k}: {v}' for k, v in sheet.items()])}```
 ''')
+
+
+async def save_sheet(sheet_file, guild, author, name):
+    sheet = _read_sheet_from_pdf(sheet_file)
+    sheet['vitalidade atual'] = sheet['vitalidade']
+    global df
+    df_row = (guild, author, name)
+    async with DF_LOCK:
+        df.loc[df_row, :] = 0
+        for k, v in sheet.items():
+            df.loc[df_row, k] = int(v)
+        df = df.astype(int)
+        df.to_csv(SHEETS_FILE)
+    return sheet
 
 
 async def evaluate_sheet_expression(guild, user, expression):
@@ -668,8 +673,8 @@ Erro ao atualizar a sua ficha, peça para o Eros verificar, mais detalhes se enc
         await ctx.author.send(f'fome = {fome}')
 
 
-if __name__ == '__main__':
-    print('Iniciando')
+def start_df():
+    global df
     if not SHEETS_FILE.is_file():
         df = pd.DataFrame(columns=['guild', 'user', 'character'] + sorted(list(set(ALIAS.values())))).set_index(
             ['guild', 'user', 'character'])
@@ -677,4 +682,9 @@ if __name__ == '__main__':
     else:
         df = pd.read_csv(SHEETS_FILE, index_col=['guild', 'user', 'character'], keep_default_na=False,
                          dtype={k: int for k in set(ALIAS.values())})
+
+
+if __name__ == '__main__':
+    print('Iniciando')
+    start_df()
     bot.run(TOKEN)
